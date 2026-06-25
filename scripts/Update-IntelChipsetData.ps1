@@ -29,6 +29,17 @@
 .PARAMETER OutputPath
     Path to the data folder. Defaults to ../data relative to script location.
 
+.PARAMETER InstallerDir
+    Folder where the downloaded SetupChipset.exe is placed for the workflow to publish as a
+    GitHub Release asset. Defaults to ../Installer relative to script location (gitignored).
+
+.PARAMETER RepoSlug
+    owner/repo used to build the GitHub Release download URL written into the catalog.
+    Defaults to AU-Mark/Intel-Chipset-URL.
+
+.PARAMETER SkipInstallerDownload
+    Scrape and rewrite the JSON but do not download the ~106MB installer (for quick local tests).
+
 .PARAMETER SkipVersionCheck
     Skip checking if the version has changed (always rewrite the JSON).
 
@@ -45,12 +56,24 @@ param(
     [string]$OutputPath,
 
     [Parameter()]
+    [string]$InstallerDir,
+
+    [Parameter()]
+    [string]$RepoSlug = 'AU-Mark/Intel-Chipset-URL',
+
+    [Parameter()]
+    [switch]$SkipInstallerDownload,
+
+    [Parameter()]
     [switch]$SkipVersionCheck
 )
 
 # Set output path
 if (-not $OutputPath) {
     $OutputPath = Join-Path $PSScriptRoot "..\data"
+}
+if (-not $InstallerDir) {
+    $InstallerDir = Join-Path $PSScriptRoot "..\Installer"
 }
 
 # Ensure output directory exists
@@ -269,6 +292,100 @@ function Get-IntelChipsetDataSelenium {
     }
 }
 
+function Get-IntelChipsetInstaller {
+    <#
+    .SYNOPSIS
+        Downloads SetupChipset.exe with a real headless Chrome.
+    .DESCRIPTION
+        downloadmirror.intel.com is fronted by Akamai bot protection that returns an empty
+        HTTP 202 to scripted clients (Invoke-WebRequest, curl, BITS). Only a genuine browser
+        gets the bytes, so the installer is fetched by driving headless Chrome to the URL and
+        waiting for the download to finish.
+    .OUTPUTS
+        String path to the downloaded SetupChipset.exe, or $null on failure.
+    #>
+    param(
+        [string]$Url,
+        [string]$DestinationDir
+    )
+
+    Write-Host "[Intel] Downloading installer via headless Chrome..." -ForegroundColor Cyan
+    Write-Host "[Intel] Source: $Url" -ForegroundColor Gray
+
+    $seleniumModule = Get-Module -ListAvailable -Name Selenium | Select-Object -First 1
+    if (-not $seleniumModule) { Write-Error "[Intel] Selenium module not found"; return $null }
+    $assembliesPath = Join-Path $seleniumModule.ModuleBase "assemblies"
+    $webDriverDll = Join-Path $assembliesPath "WebDriver.dll"
+    if (-not ([System.AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.GetName().Name -eq "WebDriver" })) {
+        Add-Type -Path $webDriverDll -ErrorAction Stop
+    }
+
+    # Clean temp download dir so completion can be detected unambiguously
+    $dlDir = Join-Path ([System.IO.Path]::GetTempPath()) ("chipset_dl_" + [System.IO.Path]::GetRandomFileName())
+    New-Item -ItemType Directory -Path $dlDir -Force | Out-Null
+
+    $driver = $null
+    try {
+        $opt = New-Object OpenQA.Selenium.Chrome.ChromeOptions
+        $opt.AddArgument("--headless=new")
+        $opt.AddArgument("--no-sandbox")
+        $opt.AddArgument("--disable-gpu")
+        $opt.AddArgument("--disable-dev-shm-usage")
+        $opt.AddArgument("--window-size=1920,1080")
+        $opt.AddArgument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+        # Allow automatic + dangerous (.exe) downloads to our folder
+        $opt.AddUserProfilePreference("download.default_directory", $dlDir)
+        $opt.AddUserProfilePreference("download.prompt_for_download", $false)
+        $opt.AddUserProfilePreference("download.directory_upgrade", $true)
+        $opt.AddUserProfilePreference("safebrowsing.enabled", $false)
+        $opt.AddUserProfilePreference("safebrowsing.disable_download_protection", $true)
+
+        $svc = [OpenQA.Selenium.Chrome.ChromeDriverService]::CreateDefaultService($assembliesPath)
+        $svc.HideCommandPromptWindow = $true
+        $svc.SuppressInitialDiagnosticInformation = $true
+        $driver = New-Object OpenQA.Selenium.Chrome.ChromeDriver($svc, $opt)
+
+        # Belt-and-suspenders: enable downloads in headless via CDP
+        try {
+            $params = New-Object 'System.Collections.Generic.Dictionary[String,Object]'
+            $params.Add("behavior", "allow")
+            $params.Add("downloadPath", $dlDir)
+            $driver.ExecuteChromeCommand("Page.setDownloadBehavior", $params)
+        } catch { }
+
+        try { $driver.Navigate().GoToUrl($Url) } catch { }
+
+        # Poll for completion: no .crdownload and a stable file size
+        $deadline = (Get-Date).AddSeconds(600)
+        $final = $null
+        while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 3
+            $partial = Get-ChildItem $dlDir -Filter '*.crdownload' -ErrorAction SilentlyContinue
+            $exe = Get-ChildItem $dlDir -Filter '*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($exe -and -not $partial) {
+                $s1 = $exe.Length; Start-Sleep -Seconds 2; $exe.Refresh(); $s2 = $exe.Length
+                if ($s1 -eq $s2 -and $s1 -gt 0) { $final = $exe; break }
+            }
+            $cur = if ($exe) { [Math]::Round($exe.Length/1MB,1) } elseif ($partial) { [Math]::Round($partial.Length/1MB,1) } else { 0 }
+            Write-Host "  ...downloading: $cur MB" -ForegroundColor DarkGray
+        }
+        if (-not $final) { Write-Error "[Intel] Installer download did not complete in time"; return $null }
+
+        if (-not (Test-Path $DestinationDir)) { New-Item -ItemType Directory -Path $DestinationDir -Force | Out-Null }
+        $dest = Join-Path $DestinationDir "SetupChipset.exe"
+        Move-Item -Path $final.FullName -Destination $dest -Force
+        $mb = [Math]::Round((Get-Item $dest).Length/1MB, 2)
+        Write-Host "[Intel] Installer downloaded: $dest ($mb MB)" -ForegroundColor Green
+        return $dest
+    } catch {
+        Write-Error "[Intel] Installer download failed: $_"
+        return $null
+    } finally {
+        if ($driver) { try { $driver.Quit() } catch { } }
+        Remove-Item $dlDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 #endregion
 
 #region Main Execution
@@ -301,8 +418,34 @@ if ($existingData -and $existingData.Latest -and -not $SkipVersionCheck) {
     }
 }
 
+# Build the GitHub Release download URL (valid once the workflow publishes the release)
+$tag = "v$($intelData.Version)"
+$releaseUrl = "https://github.com/$RepoSlug/releases/download/$tag/SetupChipset.exe"
+$installerPath = $null
+$fileSize = $null
+$assetSha = $intelData.SHA256
+
 if ($versionChanged) {
     Write-Host "[Intel] Processing version update..." -ForegroundColor Cyan
+
+    # Download the installer (only on version change) with headless Chrome - the only client
+    # that gets past Akamai. The workflow publishes this as the GitHub Release asset.
+    if (-not $SkipInstallerDownload) {
+        $installerPath = Get-IntelChipsetInstaller -Url $intelData.Url -DestinationDir $InstallerDir
+        if (-not $installerPath) {
+            Write-Error "[Intel] Installer download failed; aborting so a release is never published without its asset"
+            exit 1
+        }
+        $fileSize = (Get-Item $installerPath).Length
+        $computedSha = (Get-FileHash -Path $installerPath -Algorithm SHA256).Hash
+        if ($intelData.SHA256 -and ($computedSha -ne $intelData.SHA256)) {
+            Write-Warning "[Intel] Page SHA256 ($($intelData.SHA256)) != downloaded file SHA256 ($computedSha). Using the downloaded file hash."
+        }
+        $assetSha = $computedSha
+        Write-Host "[Intel] Installer SHA256: $assetSha" -ForegroundColor Green
+    } else {
+        Write-Host "[Intel] -SkipInstallerDownload set; not downloading the installer" -ForegroundColor Yellow
+    }
 
     # Initialize or update the JSON structure
     $jsonOutput = if ($existingData) {
@@ -332,21 +475,26 @@ if ($versionChanged) {
             Version     = $existingData.Latest.Version
             ReleaseDate = $existingData.Latest.ReleaseDate
             DownloadId  = $existingData.Latest.DownloadId
-            Url         = $existingData.Latest.Url
+            IntelUrl    = $existingData.Latest.IntelUrl
             ReadmeUrl   = $existingData.Latest.ReadmeUrl
+            Url         = $existingData.Latest.Url
             SHA256      = $existingData.Latest.SHA256
+            FileSize    = $existingData.Latest.FileSize
             ArchivedOn  = $timestamp
         }) -Force
     }
 
-    # Update Latest
+    # Update Latest. Url points at the GitHub Release asset (what consumers download);
+    # IntelUrl keeps the original Intel mirror for reference.
     $jsonOutput.Latest = [PSCustomObject]@{
         Version     = $intelData.Version
         ReleaseDate = $intelData.ReleaseDate
         DownloadId  = $intelData.DownloadId
-        Url         = $intelData.Url
+        IntelUrl    = $intelData.Url
         ReadmeUrl   = $intelData.ReadmeUrl
-        SHA256      = $intelData.SHA256
+        Url         = $releaseUrl
+        SHA256      = $assetSha
+        FileSize    = $fileSize
         UpdatedOn   = $timestamp
     }
 
@@ -355,6 +503,17 @@ if ($versionChanged) {
     # Save JSON
     $jsonOutput | ConvertTo-Json -Depth 10 | Out-File -FilePath $JsonPath -Encoding UTF8
     Write-Host "[Intel] Saved to: $JsonPath" -ForegroundColor Green
+}
+
+# Emit outputs for the GitHub Actions workflow (drives release publishing + commit)
+if ($env:GITHUB_OUTPUT) {
+    $vc = if ($versionChanged) { 'true' } else { 'false' }
+    Add-Content -Path $env:GITHUB_OUTPUT -Value "versionChanged=$vc"
+    Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$($intelData.Version)"
+    Add-Content -Path $env:GITHUB_OUTPUT -Value "tag=$tag"
+    Add-Content -Path $env:GITHUB_OUTPUT -Value "assetName=SetupChipset.exe"
+    if ($installerPath) { Add-Content -Path $env:GITHUB_OUTPUT -Value "installerPath=$installerPath" }
+    Write-Host "[Intel] Emitted workflow outputs (versionChanged=$vc)" -ForegroundColor Gray
 }
 
 Write-Host ""

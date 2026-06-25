@@ -10,6 +10,10 @@
 # Debug output
 intel_page.html
 
+# Downloaded installer (published as a GitHub Release asset, never committed to the tree)
+Installer/
+*.exe
+
 # OS files
 .DS_Store
 Thumbs.db
