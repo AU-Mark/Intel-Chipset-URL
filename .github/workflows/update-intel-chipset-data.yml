@@ -5,7 +5,11 @@ on:
     # Run daily at 8:00 AM UTC (offset from the Java 8 scraper at 7 AM to avoid overlap)
     - cron: '0 8 * * *'
   workflow_dispatch:
-    # Allow manual trigger
+    inputs:
+      force:
+        description: 'Force a full download + release even if the version is unchanged'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -84,7 +88,12 @@ jobs:
         shell: pwsh
         run: |
           Set-Location $env:GITHUB_WORKSPACE
-          & ".\scripts\Update-IntelChipsetData.ps1" -Verbose
+          if ("${{ github.event.inputs.force }}" -eq "true") {
+            Write-Host "Force requested: ignoring version check to re-download and re-publish"
+            & ".\scripts\Update-IntelChipsetData.ps1" -SkipVersionCheck -Verbose
+          } else {
+            & ".\scripts\Update-IntelChipsetData.ps1" -Verbose
+          }
         continue-on-error: true
 
       - name: Validate Data File
