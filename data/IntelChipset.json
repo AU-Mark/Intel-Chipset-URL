@@ -1,17 +1,29 @@
 {
   "Product": "Intel Chipset Device Software",
-  "LastUpdated": "2026-06-25T20:40:35Z",
+  "LastUpdated": "2026-08-03T11:22:59Z",
   "SourceUrl": "https://www.intel.com/content/www/us/en/download/19347/chipset-inf-utility.html",
   "Latest": {
-    "Version": "10.1.20398.8776",
+    "Version": "10.1.20658.8883",
     "ReleaseDate": "01/08/2026",
-    "DownloadId": "872506",
-    "IntelUrl": "https://downloadmirror.intel.com/872506/SetupChipset.exe",
-    "ReadmeUrl": "https://downloadmirror.intel.com/872506/Readme.txt",
-    "Url": "https://github.com/AU-Mark/Intel-Chipset-URL/releases/download/v10.1.20398.8776/SetupChipset.exe",
-    "SHA256": "5DA882149294917142CEA8666832E37F4D846FF04E14A313913B6A22F05E0CE2",
-    "FileSize": 111103856,
-    "UpdatedOn": "2026-06-25T20:40:35Z"
+    "DownloadId": "925343",
+    "IntelUrl": "https://downloadmirror.intel.com/925343/SetupChipset.exe",
+    "ReadmeUrl": "https://downloadmirror.intel.com/925343/Readme.txt",
+    "Url": "https://github.com/AU-Mark/Intel-Chipset-URL/releases/download/v10.1.20658.8883/SetupChipset.exe",
+    "SHA256": "F20B9F97E9A81E613D4D529AAD5D3948F5E449998CD118C6DEF4037CA6536446",
+    "FileSize": 102896464,
+    "UpdatedOn": "2026-08-03T11:22:59Z"
   },
-  "Versions": {}
+  "Versions": {
+    "10.1.20398.8776": {
+      "Version": "10.1.20398.8776",
+      "ReleaseDate": "01/08/2026",
+      "DownloadId": "872506",
+      "IntelUrl": "https://downloadmirror.intel.com/872506/SetupChipset.exe",
+      "ReadmeUrl": "https://downloadmirror.intel.com/872506/Readme.txt",
+      "Url": "https://github.com/AU-Mark/Intel-Chipset-URL/releases/download/v10.1.20398.8776/SetupChipset.exe",
+      "SHA256": "5DA882149294917142CEA8666832E37F4D846FF04E14A313913B6A22F05E0CE2",
+      "FileSize": 111103856,
+      "ArchivedOn": "2026-08-03T11:22:59Z"
+    }
+  }
 }
